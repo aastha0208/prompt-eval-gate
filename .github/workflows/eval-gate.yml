@@ -1,0 +1,118 @@
+name: "Prompt Eval Quality Gate"
+
+# Pure-Python gate. The eval *runs* happen locally where the Claude CLI is
+# authenticated, and their 3-run majority result files are committed to the
+# repo. This workflow runs the quality gate over those committed files —
+# no model access, no API key, no OAuth token required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: "Candidate prompt to gate against baseline (the suffix after 'run_' and before '_majority.json', e.g. v2_strict)"
+        required: true
+        default: "v2_strict"
+  pull_request:
+    paths:
+      - "evals/prompts/**"
+      - "evals/runner/**"
+      - "evals/datasets/**"
+      - "evals/feedback/**"
+
+permissions:
+  contents: read
+
+env:
+  RESULTS: evals/runner/results
+  BASELINE: evals/runner/results/run_v1_majority.json
+
+jobs:
+  # ── Job 1: the real gate ────────────────────────────────────────────────────
+  # Fails the build if the promotion candidate does not beat baseline cleanly.
+  quality-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve candidate
+        id: cand
+        run: |
+          CAND="${{ github.event.inputs.candidate }}"
+          CAND="${CAND:-v2_strict}"   # default candidate on PR triggers
+          echo "file=$RESULTS/run_${CAND}_majority.json" >> "$GITHUB_OUTPUT"
+          echo "name=$CAND" >> "$GITHUB_OUTPUT"
+
+      - name: Check required files exist
+        run: |
+          test -f "$BASELINE" || { echo "::error::Missing baseline majority file $BASELINE. Generate with: python evals/runner/eval_runner.py --prompt baseline --runs 3"; exit 1; }
+          test -f "${{ steps.cand.outputs.file }}" || { echo "::error::Missing candidate majority file ${{ steps.cand.outputs.file }}. Generate with: python evals/runner/eval_runner.py --prompt ${{ steps.cand.outputs.name }} --runs 3"; exit 1; }
+
+      - name: Run quality gate (${{ steps.cand.outputs.name }} vs baseline)
+        run: |
+          python evals/runner/quality_gate.py "$BASELINE" "${{ steps.cand.outputs.file }}"
+        # exit code 0 = PASS (green check), 1 = FAIL (red X → blocks merge if branch protection is on)
+
+  # ── Job 2: gate self-test (informational) ──────────────────────────────────
+  # Runs the gate against every committed candidate majority file and prints
+  # the verdict for each. Confirms previously-accepted candidates still pass
+  # against the current baseline (useful when the dataset itself changes).
+  gate-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Gate every committed candidate vs baseline
+        run: |
+          if [ ! -f "$BASELINE" ]; then
+            echo "No baseline majority file yet ($BASELINE) — skipping self-test."
+            exit 0
+          fi
+          echo "=== Gate self-test: verdict per committed candidate ==="
+          found=0
+          for f in "$RESULTS"/run_*_majority.json; do
+            [ -e "$f" ] || continue
+            case "$f" in *run_v1_majority.json) continue;; esac   # skip baseline itself
+            found=1
+            name=$(basename "$f" | sed 's/^run_//; s/_majority.json$//')
+            echo ""
+            echo "----- candidate: $name -----"
+            set +e
+            python evals/runner/quality_gate.py "$BASELINE" "$f"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then echo "VERDICT[$name] = PASS"; else echo "VERDICT[$name] = FAIL"; fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No candidate majority files committed yet. Generate e.g.:"
+            echo "  python evals/runner/eval_runner.py --prompt v2_strict --runs 3"
+          fi
+
+  # ── Job 3: feedback loop consistency check ──────────────────────────────────
+  # Pure Python, no model calls. Confirms corrections.jsonl and the dataset
+  # agree with each other — every "promoted" correction points at a real
+  # dataset ticket, and every human_correction ticket has a promoted record
+  # behind it. Catches drift from hand-edits to either file.
+  validate-feedback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate corrections.jsonl against the dataset
+        run: |
+          python evals/feedback/validate_corrections.py
+
+      - name: Dataset growth report
+        run: |
+          python evals/feedback/dataset_growth.py

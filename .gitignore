@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local eval scratch — commit only the majority files the gate reads
+evals/runner/results/run_*_[0-9].json

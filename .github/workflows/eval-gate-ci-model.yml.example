@@ -1,0 +1,111 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# THE ROAD NOT TAKEN — kept as an artifact, not an active workflow.
+#
+# This is the design I started with: let CI run the eval runner itself, calling
+# the model against the labelled dataset on every prompt PR. It works. I moved
+# away from it deliberately.
+#
+# Why I dropped it:
+#   * Cost. Every contributor who tweaks a prompt triggers a fresh set of model
+#     calls (dataset size × --runs) on CI's dime. Across a team iterating on
+#     prompts, that compounds fast.
+#   * Secrets. CI needs a live model credential sitting in the pipeline.
+#   * Auth mismatch. The committed runner authenticates through the `claude`
+#     CLI over OAuth and deliberately strips ANTHROPIC_API_KEY (see
+#     eval_runner.py::clean_env). OAuth doesn't work headless in Actions, so
+#     this path requires either an API-key rework of the runner or a
+#     CLAUDE_CODE_OAUTH_TOKEN — see the NOTE blocks below.
+#
+# The active gate (eval-gate.yml) does the opposite: contributors run the eval
+# locally and commit the majority-vote JSON, and CI only compares committed
+# files in pure Python. Zero per-PR model cost, no secrets. See the README
+# "Design decisions worth flagging" section for the full trade-off.
+#
+# When THIS design is the right call instead: a larger or less-trusted
+# contributor base, where you can't rely on authors having re-run the eval
+# locally before committing. Paying for CI model calls buys you a guarantee the
+# local-run approach can't.
+#
+# To activate: rename to `eval-gate-ci-model.yml`, resolve the auth NOTE below,
+# and add the required secret to the repository.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "Prompt Eval Quality Gate (CI runs the model)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: "Candidate prompt to evaluate (the suffix after 'run_' and before '_majority.json', e.g. v2_strict)"
+        required: true
+        default: "v2_strict"
+  pull_request:
+    paths:
+      - "evals/prompts/**"
+      - "evals/runner/**"
+      - "evals/datasets/**"
+
+permissions:
+  contents: read
+
+env:
+  RESULTS: evals/runner/results
+  BASELINE: evals/runner/results/run_v1_majority.json
+
+jobs:
+  eval-and-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # model calls are slow; dataset × 3 runs adds up
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic
+
+      # ── NOTE: AUTH ────────────────────────────────────────────────────────
+      # The committed runner calls the `claude` CLI over OAuth and strips
+      # ANTHROPIC_API_KEY. That path can't authenticate headless in CI. To run
+      # the model here you must pick ONE of:
+      #
+      #   (a) API-key rework: change eval_runner.py to call the Anthropic API
+      #       (or the CLI in API-key mode) and DO NOT strip ANTHROPIC_API_KEY.
+      #       Then expose the secret to the run step:
+      #         env:
+      #           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      #
+      #   (b) CLI with a long-lived token: install the CLI and authenticate with
+      #       a CLAUDE_CODE_OAUTH_TOKEN secret instead of interactive OAuth:
+      #         npm install -g @anthropic-ai/claude-code
+      #         env:
+      #           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      #
+      # Until one of these is wired up, the "Run eval runner" step below will
+      # fail on auth. This is left unresolved on purpose — it's the cost of the
+      # design, made visible.
+      # ──────────────────────────────────────────────────────────────────────
+
+      - name: Resolve candidate
+        id: cand
+        run: |
+          CAND="${{ github.event.inputs.candidate }}"
+          CAND="${CAND:-v2_strict}"   # default candidate on PR triggers
+          echo "name=$CAND" >> "$GITHUB_OUTPUT"
+          echo "file=$RESULTS/run_${CAND}_majority.json" >> "$GITHUB_OUTPUT"
+
+      - name: Run eval runner (calls the model — this is the expensive part)
+        # env:                                    # ← uncomment per the AUTH note
+        #   ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python evals/runner/eval_runner.py --prompt "${{ steps.cand.outputs.name }}" --runs 3
+
+      - name: Check baseline exists
+        run: |
+          test -f "$BASELINE" || { echo "::error::Missing baseline majority file $BASELINE. Generate once with: python evals/runner/eval_runner.py --prompt baseline --runs 3"; exit 1; }
+
+      - name: Run quality gate (candidate vs baseline)
+        run: |
+          python evals/runner/quality_gate.py "$BASELINE" "${{ steps.cand.outputs.file }}"
+        # exit 0 = PASS (green check), 1 = FAIL (red X → blocks merge if branch protection is on)

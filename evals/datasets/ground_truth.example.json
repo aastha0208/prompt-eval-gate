@@ -1,0 +1,236 @@
+{
+  "_meta": {
+    "description": "Example dataset for the prompt eval gate. 8 synthetic tickets across the major scenario types (pure logic, real DB integration, frontend rendering, end-to-end flows, documentation-only changes, release tickets, a deliberately-borderline non-deterministic case), plus 1 ticket sourced from a promoted human correction (see evals/feedback/).",
+    "match_status_values": ["match", "partial", "mismatch"],
+    "scoring": "match = agent primary layer == correct primary layer; partial = correct layer appears as supporting; mismatch = otherwise",
+    "verified_meaning": "true = correct layer confirmed by an explicit human verdict on the original agent run. false = inferred from a downstream signal alone (lower confidence).",
+    "source_meaning": "'synthetic' = authored directly for this example dataset. 'human_correction' = promoted from evals/feedback/corrections.jsonl after a reviewer overrode the agent's recommendation on a real ticket.",
+    "layers": {
+      "UNIT": "Pure logic, no live dependencies.",
+      "INTEGRATION": "Real service wiring, real DB queries.",
+      "BACKEND_E2E": "Full API flows, real backend, real auth.",
+      "PORTAL_UI_E2E": "True end-to-end customer journey through the UI.",
+      "CYPRESS_COMPONENT": "Frontend rendering or component state in isolation.",
+      "MANUAL": "Real hardware, exploratory testing, UX judgment, or non-deterministic concerns."
+    },
+    "counts": {
+      "match": 6,
+      "partial": 1,
+      "mismatch": 2,
+      "total_scored": 9
+    }
+  },
+  "tickets": [
+    {
+      "issue_key": "PROJ-1001",
+      "summary": "Password validator rejects valid Unicode characters",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "AuthService",
+        "labels": "Amigod, BE_Only",
+        "description": "The password complexity validator in AuthService.PasswordValidator.IsValid() rejects passwords containing valid Unicode letters (e.g. accented characters, CJK ideographs). The current regex only accepts ASCII [A-Za-z0-9]. Per spec, any Unicode letter category should be accepted. The validator is a pure function with no DB or service dependencies.",
+        "acceptance_criteria": "Passwords containing Unicode letters pass validation; ASCII-only enforcement is removed; all existing tests still pass.",
+        "implementation_notes": "Change the regex character class to use \\p{L} for Unicode letters. Pure function; no other layers touched."
+      },
+      "agent_recommendation": {
+        "primary_layer": "UNIT"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "UNIT",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Classic unit-testable validation logic with no live dependencies.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1002",
+      "summary": "Bulk-delete endpoint corrupts inventory count cache",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "InventoryAPI",
+        "labels": "Amigod, sprint_goal",
+        "description": "The POST /inventory/bulk-delete endpoint deletes the rows from the Items table but does not invalidate the InventoryCache lookup. Subsequent GET /inventory/count returns the pre-delete count until the cache TTL expires (15 minutes). Need to invalidate the cache key after successful delete. The fix touches the real InventoryRepository class and the real cache abstraction.",
+        "acceptance_criteria": "After a bulk-delete returns 200, GET /inventory/count returns the correct post-delete count within 1 second. No stale-cache reads observed in load testing.",
+        "implementation_notes": "Add cache.invalidate('inventory:count') call inside InventoryRepository.BulkDelete after the DB transaction commits."
+      },
+      "agent_recommendation": {
+        "primary_layer": "INTEGRATION"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "INTEGRATION",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Touches DB plus cache abstraction; needs real wiring to verify.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1003",
+      "summary": "Implement OAuth refresh token rotation",
+      "inputs": {
+        "issue_type": "Story",
+        "components": "IdentityService, AuthService",
+        "labels": "sprint_goal",
+        "description": "Implement RFC 6749 refresh token rotation: every time a refresh token is exchanged for a new access token, also issue a new refresh token and invalidate the old one. Affects the IdentityService token endpoint, the AuthService middleware that validates refresh tokens, and the database table that stores token state. Customer-visible flow spans multiple services.",
+        "acceptance_criteria": "A client can complete the refresh flow with the new endpoint; reusing an old refresh token returns 401; concurrent refresh attempts handled gracefully.",
+        "implementation_notes": "Token state transitions live in IdentityService.RefreshTokenStore; middleware changes in AuthService.RefreshMiddleware; DB migration for the new revoked_at column."
+      },
+      "agent_recommendation": {
+        "primary_layer": "BACKEND_E2E",
+        "supporting": "INTEGRATION"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "BACKEND_E2E",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Full customer-facing auth flow spanning two services; backend E2E warranted.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1004",
+      "summary": "Update Swagger description for deprecated /v1/orders endpoint",
+      "inputs": {
+        "issue_type": "Task",
+        "components": "OrdersAPI",
+        "labels": "documentation",
+        "description": "The Swagger description for GET /v1/orders still references the legacy 'orderState' field, which was removed in v2.3. Update the description to point to the new 'status' field and add a note that v1 is deprecated and will be removed in v3.0.",
+        "acceptance_criteria": "Swagger UI for /v1/orders shows the corrected description; no functional code changes.",
+        "implementation_notes": "XML doc comment change only on the controller method. No behaviour change; no tests added."
+      },
+      "agent_recommendation": {
+        "primary_layer": "MANUAL"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "MANUAL",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Documentation-only change; no automation value.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1005",
+      "summary": "Dashboard chart doesn't render when dataset is empty",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "DashboardWeb",
+        "labels": "Amigod, UX_Required",
+        "description": "The Inventory Overview chart on the dashboard throws a JavaScript TypeError when the API returns an empty dataset (e.g. for a brand-new tenant with no items). The error is in DashboardChart.tsx where d.length is accessed on an undefined value. Should render a friendly empty-state placeholder instead. Pure frontend component bug.",
+        "acceptance_criteria": "Empty dataset renders the empty-state UI; no console errors; chart renders correctly when data arrives.",
+        "implementation_notes": "Add null/empty guard in DashboardChart.tsx before the d.length access. Empty-state component already exists in the design system."
+      },
+      "agent_recommendation": {
+        "primary_layer": "CYPRESS_COMPONENT"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "CYPRESS_COMPONENT",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Frontend component rendering bug; isolated component test is the right level.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1006",
+      "summary": "Release 3.2 GA",
+      "inputs": {
+        "issue_type": "Story",
+        "components": "None",
+        "labels": "None",
+        "description": "Release coordination ticket for the 3.2 GA milestone. Branch cut, version bump, release notes, deploy.",
+        "acceptance_criteria": "None",
+        "implementation_notes": "None"
+      },
+      "agent_recommendation": {
+        "primary_layer": "MANUAL"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "MANUAL",
+        "match_status": "match",
+        "verified": true,
+        "failure_mode": null,
+        "notes": "Coordination ticket; no testable code change. Correctly routed to manual.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1007",
+      "summary": "Tenant data still visible after offboarding under load",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "TenantService, DataLayer",
+        "labels": "Amigod",
+        "description": "When a tenant is offboarded while their workspace is under heavy concurrent activity, some of their data remains queryable for several minutes after the offboarding API returns success. Race condition between the offboarding transaction and in-flight data writes. Reproducible only under sustained load and only intermittently; the data team's load testing suite can sometimes reproduce.",
+        "acceptance_criteria": "Tenant data is unreachable within 5 seconds of a successful offboarding response, even under load.",
+        "implementation_notes": "Investigation needed. Suspect a lock-ordering issue in TenantService.OffboardWorkspace. Adding integration coverage that reliably reproduces this is non-trivial because the bug requires concurrency."
+      },
+      "agent_recommendation": {
+        "primary_layer": "INTEGRATION",
+        "supporting": "BACKEND_E2E"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "INTEGRATION",
+        "match_status": "partial",
+        "verified": true,
+        "failure_mode": "wrong-rank",
+        "notes": "Team added a backend E2E test because the integration tier could not reliably reproduce the concurrency. Agent recommended INTEGRATION as primary; team chose BACKEND_E2E. Right layer present in agent's recommendation, but ranked wrong.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1008",
+      "summary": "Investigate intermittent failures of TenantSummaryReport background job",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "ReportingService",
+        "labels": "Amigod",
+        "description": "TenantSummaryReport job times out approximately 2% of the time in production. Logs show a wide variety of contributing factors (slow third-party API, transient DB locks, occasional OOM). Customers see a stale 'last updated' timestamp. The job is also affected by an upstream change in the third-party API rate-limit policy that we have no control over. Likely not something we can reliably automate against.",
+        "acceptance_criteria": "Investigation outcome documented; mitigations identified; clear recommendation on whether further action is warranted.",
+        "implementation_notes": "Multiple root causes suspected; deterministic reproduction not feasible in our environments."
+      },
+      "agent_recommendation": {
+        "primary_layer": "INTEGRATION"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "MANUAL",
+        "match_status": "mismatch",
+        "verified": true,
+        "failure_mode": "over-automation",
+        "notes": "Declined for automation — non-deterministic root causes including an external dependency the team cannot control. Agent over-recommended INTEGRATION when human investigation is the correct outcome. Useful failure case for the eval — exercises the prompt's discipline around when NOT to automate.",
+        "source": "synthetic"
+      }
+    },
+    {
+      "issue_key": "PROJ-1009",
+      "summary": "Discount code stacking applies wrong precedence order",
+      "inputs": {
+        "issue_type": "Bug",
+        "components": "PricingEngine",
+        "labels": "sprint_goal",
+        "description": "When multiple discount codes are stacked, PricingEngine.ApplyDiscounts() applies percentage discounts before flat-amount discounts regardless of each code's configured precedence value. Pure calculation over an in-memory list of DiscountRule objects passed into the method — no DB or service calls involved.",
+        "acceptance_criteria": "Discounts apply in configured precedence order; percentage-then-flat and flat-then-percentage stacks both produce the documented totals.",
+        "implementation_notes": "Fix is confined to the sort step inside ApplyDiscounts(). Pure function over an in-memory list; no live dependencies."
+      },
+      "agent_recommendation": {
+        "primary_layer": "MANUAL"
+      },
+      "ground_truth": {
+        "correct_primary_layer": "UNIT",
+        "match_status": "mismatch",
+        "verified": true,
+        "failure_mode": "under-automation",
+        "notes": "Pure calculation logic over an in-memory list — textbook unit test, no manual judgment needed. Agent over-indexed on the word 'precedence' as though it were a business/UX call rather than reading the implementation notes, which state it's a pure function with no live dependencies.",
+        "source": "human_correction",
+        "reviewer": "a.singh",
+        "captured_at": "2026-06-18T14:32:00+00:00"
+      }
+    }
+  ]
+}
