@@ -170,7 +170,7 @@ python evals/feedback/dataset_growth.py
 
 This is a reference implementation, not a polished framework. A few things you'd want to add for a production-scale eval system:
 
-- **Small dataset.** Nine tickets (eight synthetic, one promoted correction) across the major scenario types. A useful eval needs at least 20–30 labelled examples to detect statistically meaningful regressions on small accuracy shifts — the feedback loop is the intended mechanism for getting there, but it takes real usage over time, not a single pass.
+- **The published dataset is a small, synthetic demo.** The nine tickets shipped here (eight synthetic, one promoted correction) exist to demonstrate the mechanism end-to-end — not to produce statistically meaningful accuracy numbers. The system itself was validated privately against ~25–30 labelled real tickets; that dataset can't be published because it's internal company data. If you fork this, a meaningful eval needs 20–30+ labelled examples of your own, and the feedback loop is the intended way to grow there over time.
 - **Prompt–JSON binding check.** The current gate trusts the contributor's committed JSON to actually come from the committed prompt. A hash-of-prompt field in the result JSON would let the gate detect stale results. Cheap to add.
 - **Multi-model evaluation.** This was built for Claude. Swapping to a different LLM means changing the CLI invocation in `eval_runner.py` — a small surface but not zero.
 - **Cost tracking.** No telemetry on per-run token spend.
