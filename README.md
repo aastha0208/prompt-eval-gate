@@ -1,12 +1,8 @@
 # Prompt Eval Gate
 
-> **Related repos** — This is one half of a two-repo project:
-> - 🤖 [**test-strategy-adviser**](https://github.com/aastha0208/test-strategy-adviser) — the agent: a GitHub Action that recommends test-automation layers for engineering tickets.
-> - 🧪 **prompt-eval-gate** (you are here) — the evaluation system that keeps that agent honest.
+**Decision support for releasing AI prompt changes.** Every prompt change is scored against a labelled dataset, compared with the current baseline, and blocked if it makes the AI worse, so release decisions rest on evidence rather than a few spot checks.
 
-A regression-testing harness for LLM prompts. Treats prompts like production code: every change runs against a labelled dataset, and the change cannot ship until it scores at least as well as the current baseline.
-
-This is the evaluation system for the [**test-strategy-adviser**](https://github.com/aastha0208/test-strategy-adviser) — a GitHub Actions workflow that uses Claude to recommend test-automation layers for incoming engineering tickets. That repo is the agent; this repo is the quality layer around it: it treats the adviser's prompt like code and blocks regressions before they ship. Built as a portfolio piece, and a reusable template anyone running a Claude-powered agent in CI can fork and adapt.
+It evaluates a real agent: [Automation Layer Adviser](https://github.com/aastha0208/automation-layer-adviser), a GitHub Action that uses Claude to recommend the right test-automation layer for engineering tickets. That repo is the agent; this one decides whether a change to the agent's prompt is safe to ship. It's built so anyone running a Claude-powered agent in CI can fork and adapt it.
 
 ## The problem this solves
 
